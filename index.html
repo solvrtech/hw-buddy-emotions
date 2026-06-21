@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Check-In Animations Viewer</title>
+    <script src="https://unpkg.com/@rive-app/canvas@2.7.0"></script>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --card-bg: #1a1d24;
+        --card-border: #2a2e38;
+        --text: #e8e9ec;
+        --text-dim: #9a9ea8;
+        --accent: #5b8cff;
+        --accent-hover: #4a7bef;
+        --stop: #ff5b6b;
+        --stop-hover: #ef4a5b;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 32px 20px;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+      }
+
+      h1 {
+        text-align: center;
+        font-size: 28px;
+        font-weight: 600;
+        margin: 0 0 8px;
+      }
+
+      p.subtitle {
+        text-align: center;
+        color: var(--text-dim);
+        margin: 0 0 36px;
+        font-size: 14px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 20px;
+        max-width: 1100px;
+        margin: 0 auto;
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 16px;
+        padding: 18px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .card-title {
+        font-size: 16px;
+        font-weight: 600;
+        text-transform: capitalize;
+        margin-bottom: 12px;
+      }
+
+      .canvas-wrap {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        background: #11141a;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 14px;
+        position: relative;
+        cursor: pointer;
+        transition: box-shadow 0.15s ease;
+      }
+
+      .canvas-wrap:hover {
+        box-shadow: 0 0 0 2px var(--accent);
+      }
+
+      canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      .status {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.5);
+        color: var(--text-dim);
+      }
+
+      .status.playing {
+        color: #6bffa0;
+      }
+
+      .controls {
+        display: flex;
+        gap: 10px;
+        width: 100%;
+      }
+
+      button {
+        flex: 1;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 14px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          background 0.15s ease,
+          opacity 0.15s ease;
+        color: white;
+      }
+
+      button:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+
+      .btn-play {
+        background: var(--accent);
+      }
+      .btn-play:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+
+      .btn-stop {
+        background: var(--stop);
+      }
+      .btn-stop:hover:not(:disabled) {
+        background: var(--stop-hover);
+      }
+
+      .load-error {
+        color: var(--stop);
+        font-size: 12px;
+        text-align: center;
+        padding: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Check-In Animations</h1>
+    <p class="subtitle">
+      Arahkan mouse ke canvas untuk play, geser keluar untuk stop -- atau
+      gunakan tombol
+    </p>
+
+    <div class="grid" id="grid"></div>
+
+    <script>
+      // Daftar semua file .riv (file eksternal, di-load relatif terhadap HTML ini)
+      const animations = [
+        { key: "angry", label: "Angry", file: "check-in-angry.riv" },
+        { key: "anxious", label: "Anxious", file: "check-in-anxious.riv" },
+        { key: "happy", label: "Happy", file: "check-in-happy.riv" },
+        {
+          key: "optimistic",
+          label: "Optimistic",
+          file: "check-in-optimistic.riv",
+        },
+        { key: "sad", label: "Sad", file: "check-in-sad.riv" },
+        { key: "stressed", label: "Stressed", file: "check-in-stressed.riv" },
+        { key: "tired", label: "Tired", file: "check-in-tired.riv" },
+        { key: "relaxed", label: "Relaxed", file: "check-in-relaxed.riv" },
+        { key: "lonely", label: "Lonely", file: "check-in-lonely.riv" },
+        { key: "loving", label: "Loving", file: "check-in-loving.riv" },
+        { key: "curious", label: "Curious", file: "check-in-curious.riv" },
+        {
+          key: "unfocused",
+          label: "Unfocused",
+          file: "check-in-unfocused.riv",
+        },
+        {
+          key: "annoyed",
+          label: "Annoyed",
+          file: "check-in-annoyed.riv",
+        },
+        {
+          key: "courageous",
+          label: "Courageous",
+          file: "check-in-courageous.riv",
+        },
+        {
+          key: "grateful",
+          label: "Grateful",
+          file: "check-in-grateful.riv",
+        },
+      ];
+
+      const grid = document.getElementById("grid");
+      const instances = {};
+
+      animations.forEach((anim) => {
+        // Build card markup
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+      <div class="card-title">${anim.label}</div>
+      <div class="canvas-wrap">
+        <canvas id="canvas-${anim.key}"></canvas>
+        <div class="status" id="status-${anim.key}">idle</div>
+      </div>
+      <div class="controls">
+        <button class="btn-play" id="play-${anim.key}">▶ Play</button>
+        <button class="btn-stop" id="stop-${anim.key}" disabled>■ Stop</button>
+      </div>
+    `;
+        grid.appendChild(card);
+
+        const canvas = card.querySelector(`#canvas-${anim.key}`);
+        const playBtn = card.querySelector(`#play-${anim.key}`);
+        const stopBtn = card.querySelector(`#stop-${anim.key}`);
+        const statusEl = card.querySelector(`#status-${anim.key}`);
+
+        // Set canvas resolution based on rendered size
+        function resizeCanvas() {
+          const rect = canvas.getBoundingClientRect();
+          const dpr = window.devicePixelRatio || 1;
+          canvas.width = rect.width * dpr;
+          canvas.height = rect.height * dpr;
+        }
+        resizeCanvas();
+        window.addEventListener("resize", resizeCanvas);
+
+        // Akan diisi saat onLoad: nama state machine ATAU nama animasi yang valid.
+        // Ini WAJIB di-pass ulang setiap kali play(), karena setelah stop() rive-js
+        // melepas binding ke animasi sebelumnya -- play() tanpa nama tidak akan
+        // tahu animasi apa yang harus dijalankan lagi.
+        let playbackName = null;
+        let isStateMachine = false;
+
+        // Load the external .riv file
+        const riveInstance = new rive.Rive({
+          src: anim.file,
+          canvas: canvas,
+          autoplay: false,
+          autoBind: true,
+          onLoad: () => {
+            riveInstance.resizeDrawingSurfaceToCanvas();
+
+            // Prioritaskan state machine kalau ada, fallback ke animasi biasa
+            const stateMachines = riveInstance.stateMachineNames;
+            const linearAnimations = riveInstance.animationNames;
+
+            if (stateMachines && stateMachines.length > 0) {
+              playbackName = stateMachines[0];
+              isStateMachine = true;
+            } else if (linearAnimations && linearAnimations.length > 0) {
+              playbackName = linearAnimations[0];
+              isStateMachine = false;
+            }
+
+            statusEl.textContent = "ready";
+            playBtn.disabled = false;
+          },
+          onLoadError: (err) => {
+            statusEl.textContent = "error";
+            statusEl.style.color = "#ff5b6b";
+            playBtn.disabled = true;
+            const errDiv = document.createElement("div");
+            errDiv.className = "load-error";
+            errDiv.textContent = "Gagal memuat file .riv";
+            card.appendChild(errDiv);
+            console.error(`Failed to load ${anim.file}`, err);
+          },
+        });
+
+        instances[anim.key] = riveInstance;
+        playBtn.disabled = true; // enabled once loaded
+
+        function doPlay() {
+          if (playBtn.disabled) return; // belum loaded atau sudah playing
+          if (playbackName) {
+            riveInstance.play(playbackName);
+          } else {
+            // fallback kalau nama tidak terdeteksi (seharusnya jarang terjadi)
+            riveInstance.play();
+          }
+          statusEl.textContent = "playing";
+          statusEl.classList.add("playing");
+          playBtn.disabled = true;
+          stopBtn.disabled = false;
+        }
+
+        function doStop() {
+          if (stopBtn.disabled) return; // sedang tidak playing
+          if (playbackName) {
+            riveInstance.stop(playbackName);
+            // Reset artboard ke frame/state awal (timeline posisi 0), tapi
+            // jangan langsung autoplay -- biarkan diam di frame pertama.
+            riveInstance.reset({
+              artboard: riveInstance.activeArtboard,
+              [isStateMachine ? "stateMachines" : "animations"]: playbackName,
+              autoplay: false,
+            });
+            riveInstance.resizeDrawingSurfaceToCanvas();
+          } else {
+            riveInstance.stop();
+          }
+          statusEl.textContent = "stopped";
+          statusEl.classList.remove("playing");
+          playBtn.disabled = false;
+          stopBtn.disabled = true;
+        }
+
+        // Trigger lewat klik tombol
+        playBtn.addEventListener("click", doPlay);
+        stopBtn.addEventListener("click", doStop);
+
+        // Trigger lewat hover di area canvas: mouse masuk -> play, mouse keluar -> stop
+        const canvasWrap = card.querySelector(".canvas-wrap");
+        canvasWrap.addEventListener("mouseenter", doPlay);
+        canvasWrap.addEventListener("mouseleave", doStop);
+      });
+    </script>
+  </body>
+</html>

@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="shortcut icon" href="favicon.ico" />
     <title>Check-In Animations Viewer</title>
     <script src="https://unpkg.com/@rive-app/canvas@2.7.0"></script>
     <style>
@@ -81,6 +82,9 @@
         position: relative;
         cursor: pointer;
         transition: box-shadow 0.15s ease;
+        /* Mencegah browser men-throttle/decode canvas yang sedang
+           tidak terlihat sepenuhnya saat scroll cepat */
+        contain: layout paint;
       }
 
       .canvas-wrap:hover {
@@ -158,14 +162,13 @@
   <body>
     <h1>Check-In Animations</h1>
     <p class="subtitle">
-      Arahkan mouse ke canvas untuk play, geser keluar untuk stop -- atau
-      gunakan tombol
+      Hover your mouse over the canvas to play, drag it out to stop -- or use
+      the buttons (e.g. on smartphone)
     </p>
 
     <div class="grid" id="grid"></div>
 
     <script>
-      // Daftar semua file .riv (file eksternal, di-load relatif terhadap HTML ini)
       const animations = [
         { key: "angry", label: "Angry", file: "check-in-angry.riv" },
         { key: "anxious", label: "Anxious", file: "check-in-anxious.riv" },
@@ -180,7 +183,16 @@
         { key: "tired", label: "Tired", file: "check-in-tired.riv" },
         { key: "relaxed", label: "Relaxed", file: "check-in-relaxed.riv" },
         { key: "lonely", label: "Lonely", file: "check-in-lonely.riv" },
-        { key: "loving", label: "Loving", file: "check-in-loving.riv" },
+        {
+          key: "loving-girly",
+          label: "Loving (Girly)",
+          file: "check-in-loving-girly.riv",
+        },
+        {
+          key: "loving-neutral",
+          label: "Loving (Neutral)",
+          file: "check-in-loving-neutral.riv",
+        },
         { key: "curious", label: "Curious", file: "check-in-curious.riv" },
         {
           key: "unfocused",
@@ -228,16 +240,7 @@
         const playBtn = card.querySelector(`#play-${anim.key}`);
         const stopBtn = card.querySelector(`#stop-${anim.key}`);
         const statusEl = card.querySelector(`#status-${anim.key}`);
-
-        // Set canvas resolution based on rendered size
-        function resizeCanvas() {
-          const rect = canvas.getBoundingClientRect();
-          const dpr = window.devicePixelRatio || 1;
-          canvas.width = rect.width * dpr;
-          canvas.height = rect.height * dpr;
-        }
-        resizeCanvas();
-        window.addEventListener("resize", resizeCanvas);
+        const canvasWrap = card.querySelector(".canvas-wrap");
 
         // Akan diisi saat onLoad: nama state machine ATAU nama animasi yang valid.
         // Ini WAJIB di-pass ulang setiap kali play(), karena setelah stop() rive-js
@@ -245,6 +248,12 @@
         // tahu animasi apa yang harus dijalankan lagi.
         let playbackName = null;
         let isStateMachine = false;
+        let isLoaded = false;
+        // Guard supaya reset()/play() yang dipanggil cepat berurutan (umum
+        // terjadi saat scroll, karena mouseenter/mouseleave bisa ter-trigger
+        // berkali-kali dalam waktu singkat) tidak saling tabrakan dan membuat
+        // WASM artboard berada di state tidak konsisten (-> tampak blank/hitam).
+        let isTransitioning = false;
 
         // Load the external .riv file
         const riveInstance = new rive.Rive({
@@ -252,8 +261,13 @@
           canvas: canvas,
           autoplay: false,
           autoBind: true,
+          // Berbagi satu context WebGL untuk semua instance di halaman ini.
+          // Tanpa ini, 15 canvas berjalan bersamaan rawan kena limit context
+          // WebGL milik browser (Chrome ~16 per tab); saat limit tercapai,
+          // browser akan mem-paksa-hapus context yang lain -> jadi hitam.
+          useOffscreenRenderer: true,
           onLoad: () => {
-            riveInstance.resizeDrawingSurfaceToCanvas();
+            isLoaded = true;
 
             // Prioritaskan state machine kalau ada, fallback ke animasi biasa
             const stateMachines = riveInstance.stateMachineNames;
@@ -267,6 +281,7 @@
               isStateMachine = false;
             }
 
+            resizeCanvas();
             statusEl.textContent = "ready";
             playBtn.disabled = false;
           },
@@ -276,7 +291,7 @@
             playBtn.disabled = true;
             const errDiv = document.createElement("div");
             errDiv.className = "load-error";
-            errDiv.textContent = "Gagal memuat file .riv";
+            errDiv.textContent = "Failed to load file .riv";
             card.appendChild(errDiv);
             console.error(`Failed to load ${anim.file}`, err);
           },
@@ -285,12 +300,28 @@
         instances[anim.key] = riveInstance;
         playBtn.disabled = true; // enabled once loaded
 
+        // Resize berbasis ukuran nyata elemen canvas, dipanggil lewat
+        // ResizeObserver (bukan cuma window "resize") supaya tetap akurat
+        // walau card baru masuk viewport saat discroll, berubah ukuran
+        // akibat reflow grid, dll.
+        function resizeCanvas() {
+          if (!isLoaded) return;
+          const rect = canvas.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0) return; // belum terlayout, skip
+          riveInstance.resizeDrawingSurfaceToCanvas();
+        }
+
+        const resizeObserver = new ResizeObserver(() => {
+          resizeCanvas();
+        });
+        resizeObserver.observe(canvas);
+
         function doPlay() {
-          if (playBtn.disabled) return; // belum loaded atau sudah playing
+          if (!isLoaded || isTransitioning) return;
+          if (playBtn.disabled) return; // sudah playing
           if (playbackName) {
             riveInstance.play(playbackName);
           } else {
-            // fallback kalau nama tidak terdeteksi (seharusnya jarang terjadi)
             riveInstance.play();
           }
           statusEl.textContent = "playing";
@@ -300,24 +331,30 @@
         }
 
         function doStop() {
+          if (!isLoaded || isTransitioning) return;
           if (stopBtn.disabled) return; // sedang tidak playing
+
+          isTransitioning = true;
+
           if (playbackName) {
             riveInstance.stop(playbackName);
-            // Reset artboard ke frame/state awal (timeline posisi 0), tapi
-            // jangan langsung autoplay -- biarkan diam di frame pertama.
+            // Reset artboard ke frame/state awal, tapi jangan langsung
+            // autoplay -- biarkan diam di frame pertama.
             riveInstance.reset({
               artboard: riveInstance.activeArtboard,
               [isStateMachine ? "stateMachines" : "animations"]: playbackName,
               autoplay: false,
             });
-            riveInstance.resizeDrawingSurfaceToCanvas();
+            resizeCanvas();
           } else {
             riveInstance.stop();
           }
+
           statusEl.textContent = "stopped";
           statusEl.classList.remove("playing");
           playBtn.disabled = false;
           stopBtn.disabled = true;
+          isTransitioning = false;
         }
 
         // Trigger lewat klik tombol
@@ -325,9 +362,28 @@
         stopBtn.addEventListener("click", doStop);
 
         // Trigger lewat hover di area canvas: mouse masuk -> play, mouse keluar -> stop
-        const canvasWrap = card.querySelector(".canvas-wrap");
         canvasWrap.addEventListener("mouseenter", doPlay);
         canvasWrap.addEventListener("mouseleave", doStop);
+
+        // Saat canvas keluar dari viewport (karena discroll jauh), hentikan
+        // render loop instance ini untuk menghemat resource. Saat masuk
+        // viewport lagi, resize ulang supaya gambar pasti tampil dengan benar
+        // -- ini mengatasi kasus canvas tampak blank setelah discroll lewat.
+        const visibilityObserver = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (!isLoaded) return;
+              if (entry.isIntersecting) {
+                riveInstance.startRendering();
+                resizeCanvas();
+              } else {
+                riveInstance.stopRendering();
+              }
+            });
+          },
+          { threshold: 0.01 },
+        );
+        visibilityObserver.observe(canvasWrap);
       });
     </script>
   </body>
